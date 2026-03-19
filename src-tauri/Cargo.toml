@@ -1,0 +1,17 @@
+[package]
+name = "oxidized-pad"
+version = "0.1.0"
+description = "A high-performance Rust-based notepad"
+authors = ["Your Name"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2.0", features = [] }
+
+[dependencies]
+tauri = { version = "2.0", features = [] }
+tauri-plugin-fs = "2.0"       # ファイル操作用
+tauri-plugin-dialog = "2.0"   # 保存・開くダイアログ用
+tauri-plugin-shell = "2.0"    # ブラウザ起動用
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
