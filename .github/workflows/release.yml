@@ -2,22 +2,22 @@ name: "Release Build"
 
 on:
   push:
-    tags:
-      - "v*" # v1.0.0 などのタグがついた時に発動
+    tags: ["v*"] # v1.0.0などのタグで発動
+  workflow_dispatch: # 手動実行も可能にする
 
 jobs:
-  publish-tauri:
+  publish:
     permissions:
       contents: write
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: "macos-latest" # app, ipa 用
+          - platform: "macos-latest" # .app, .ipa
             args: "--target universal-apple-darwin"
-          - platform: "ubuntu-22.04" # deb 用
+          - platform: "windows-latest" # .exe
             args: ""
-          - platform: "windows-latest" # exe 用
+          - platform: "ubuntu-22.04" # .deb, html5, .apk
             args: ""
 
     runs-on: ${{ matrix.platform }}
@@ -28,24 +28,25 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: "npm"
+          # キャッシュエラーを避けるため cache: npm は書かない
 
       - name: install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          # モバイルビルドに必要なターゲットを追加
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-ios,x86_64-apple-ios,aarch64-apple-ios-sim' || '' }}
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-ios,x86_64-apple-ios' || 'aarch64-linux-android' }}
 
       - name: install dependencies (ubuntu only)
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libappindicator3-dev librsvg2-dev patchelf
+          # Android SDK/NDKのセットアップ (apk用)
+          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
 
       - name: install frontend dependencies
-        run: npm install
+        run: npm install --no-package-lock
 
-      # Web版 (HTML5) のビルドとアップロード (Ubuntuジョブで代表して実行)
+      # 【本気ポイント】HTML5版のビルド (Ubuntuで実行)
       - name: build web version
         if: matrix.platform == 'ubuntu-22.04'
         run: npm run build
@@ -57,41 +58,25 @@ jobs:
           name: html5-bundle
           path: dist/
 
-      # Tauri公式アクションでデスクトップ版ビルド & GitHub Release作成
-      - name: build and release
+      # デスクトップ版ビルド & Release作成
+      - name: build and release desktop
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Apple/Androidの署名が必要な場合はここにSecretを設定
-          # APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "OxidizedPad ${{ github.ref_name }}"
-          releaseBody: "Rust-powered multi-platform release."
           includeRelease: true
           args: ${{ matrix.args }}
 
-  # Androidビルド専用ジョブ (JDKが必要なため分離)
-  build-android:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: setup node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - name: install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: "aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android"
-      - name: setup TNK/SDK
-        uses: android-actions/setup-android@v3
-      - name: install tauri-cli
-        run: cargo install tauri-cli --version "^2.0.0"
-      - name: build apk
-        run: cargo tauri android build
-      - name: upload apk
+      # モバイル版ビルド (AndroidのみUbuntuで追加実行)
+      - name: build android apk
+        if: matrix.platform == 'ubuntu-22.04'
+        run: npx tauri android build --debug # 最初はdebug版でテスト
+      
+      - name: upload apk artifact
+        if: matrix.platform == 'ubuntu-22.04'
         uses: actions/upload-artifact@v4
         with:
-          name: android-apk
-          path: src-tauri/gen/android/app/build/outputs/apk/release/*.apk
+          name: android-debug-apk
+          path: src-tauri/gen/android/app/build/outputs/apk/debug/*.apk
