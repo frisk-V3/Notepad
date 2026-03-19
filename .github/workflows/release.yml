@@ -1,0 +1,97 @@
+name: "Release Build"
+
+on:
+  push:
+    tags:
+      - "v*" # v1.0.0 などのタグがついた時に発動
+
+jobs:
+  publish-tauri:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: "macos-latest" # app, ipa 用
+            args: "--target universal-apple-darwin"
+          - platform: "ubuntu-22.04" # deb 用
+            args: ""
+          - platform: "windows-latest" # exe 用
+            args: ""
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+
+      - name: install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # モバイルビルドに必要なターゲットを追加
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-ios,x86_64-apple-ios,aarch64-apple-ios-sim' || '' }}
+
+      - name: install dependencies (ubuntu only)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: install frontend dependencies
+        run: npm install
+
+      # Web版 (HTML5) のビルドとアップロード (Ubuntuジョブで代表して実行)
+      - name: build web version
+        if: matrix.platform == 'ubuntu-22.04'
+        run: npm run build
+      
+      - name: upload web artifact
+        if: matrix.platform == 'ubuntu-22.04'
+        uses: actions/upload-artifact@v4
+        with:
+          name: html5-bundle
+          path: dist/
+
+      # Tauri公式アクションでデスクトップ版ビルド & GitHub Release作成
+      - name: build and release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Apple/Androidの署名が必要な場合はここにSecretを設定
+          # APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "OxidizedPad ${{ github.ref_name }}"
+          releaseBody: "Rust-powered multi-platform release."
+          includeRelease: true
+          args: ${{ matrix.args }}
+
+  # Androidビルド専用ジョブ (JDKが必要なため分離)
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: "aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android"
+      - name: setup TNK/SDK
+        uses: android-actions/setup-android@v3
+      - name: install tauri-cli
+        run: cargo install tauri-cli --version "^2.0.0"
+      - name: build apk
+        run: cargo tauri android build
+      - name: upload apk
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: src-tauri/gen/android/app/build/outputs/apk/release/*.apk
